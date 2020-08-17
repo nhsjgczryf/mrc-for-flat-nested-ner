@@ -75,6 +75,7 @@ def train(args,train_dataloader,dev_dataloader):
     '''
     model = MyModel(args)
     model = torch.nn.DataParallel(model,device_ids=args.device_ids)
+    model.train()
     no_decay = ['bias','LayerNorm.weight']
     optimizer_grouped_parameters = [
             {"params":[p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
@@ -83,10 +84,30 @@ def train(args,train_dataloader,dev_dataloader):
         ]
     optimizer = torch.optim.AdamW(optimizer_grouped_parameters,lr=args.lr)
     scheduler = get_linear_schedule_with_warmup(optimizer,num_warmup_steps=args.warmup_steps)
-    model.train()
     writer = SummaryWriter(log_dir='./log')
+    train_batchs = len(train_dataloader)
     for epoch in range(len(args.max_epoch)):
+        start_time = time.time()
         for i,batch in enumerate(train_dataloader):
+            optimizer.zero_grad()
+            text, mask, start, end,span = batch['text'],batch['mask'],batch['start'],batch['end'],batch['span']
+            text, mask, start, end = torch.tensor(text).cuda(), torch.tensor(mask).cuda(), torch.tensor(start).cuda(), torch.tensor(end).cuda()
+            loss = model.loss(text,mask,start,end,span)
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+            if i%100==0:
+                current = time.time()
+                run_time = (current-start_time)/(60*60)
+                remain = run_time*(train_batchs-i-1)(i+1)
+                print("epoch:{}/{} batch:{}/{},当前epoch已经运行{:.2f}h，剩余{:.2f}h".format(epoch + 1, args.max_epoch, i + 1, train_batchs,
+                                                                                    run_time, remain))
+            writer.add_scalar("loss",loss.item(),i)
+            writer.flush()
+        torch.save({"epoch":epoch,'model_state_dic':model.state_dict(),"args":args},"./checkpoint")
+    writer.close()
+
+
 
 
 def evaluation():
@@ -99,3 +120,5 @@ def evaluation():
 if __name__=="__main__":
     args = args_parser()
     set_seed(args.seed)
+    train_dataloader, dev_dataloader = load_data(args)
+    train(args, train_dataloader, dev_dataloader)

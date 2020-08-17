@@ -4,7 +4,7 @@
 """
 import json
 import torch
-from torch.utils.data import dataset,dataloader
+from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 from transformers import *
 
@@ -51,7 +51,8 @@ def get_batch_data(batch_size):
 
         yield batch_texts, attention_mask
 
-class MyDataset(dataset):
+
+class MyDataset(Dataset):
     def __init__(self,path, tokenizer):
         """
         Args:
@@ -59,15 +60,15 @@ class MyDataset(dataset):
         """
         with open(path,encoding='utf-8') as f:
             self.data = json.load(f)
-        self.example = []
+        self.examples = []
         self.texts = []
         self.masks = []
         self.start_targets = []
         self.end_targets = []
         self.spans = []
         for d in self.data:
-            if not d['imposible']:
-                self.example.append(d)
+            if not d['impossible']:
+                self.examples.append(d)
                 context = d['context']
                 context = context.split()
                 query = d['query']
@@ -105,4 +106,20 @@ class MyDataset(dataset):
     def __getitem__(self, i):
         return {"example":self.examples[i],'text':self.texts[i],
                 'start':self.start_targets[i],'end':self.end_targets[i],
-                'span':self.spans[i]}
+                'span':self.spans[i],'mask':self.masks[i]}
+
+ollate_fn=lambda x:x
+def collate_fn(batch):
+    print(batch)
+    nbatch = {}
+    for d in batch:
+        for k,v in d.items():
+            nbatch[k]=nbatch.get(k,[])+[v]
+    return nbatch
+
+if __name__=="__main__":
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    dataset = MyDataset("./datasets/OntoNotes4.0/mrc-ner.train",tokenizer)
+    dataloader = DataLoader(dataset,batch_size=20,collate_fn=collate_fn)
+    data = list(dataloader)
