@@ -7,7 +7,7 @@ from transformers import *
 
 class MyModel(nn.Module):
     def __init__(self, config):
-        self.super(MyModel, self).__init__()
+        super(MyModel, self).__init__()
         self.config = config
         self.pretrained_model = AutoModel.from_pretrained(config.pretrained_model_name_or_path)
         hidden_size = self.pretrained_model.config.hidden_size
@@ -53,7 +53,7 @@ class MyModel(nn.Module):
             spans.append(sps)
         return spans
 
-    def _loss(self, input, mask, start_target, end_target, spans):
+    def loss(self, input, mask, start_target, end_target, spans):
         '''
         :param input: (batch, max_len)
         :param mask: (batch, max_len)
