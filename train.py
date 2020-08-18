@@ -55,7 +55,7 @@ def args_parser():
     parser.add_argument("--alpha",default=1/3,type=float)
     parser.add_argument("--beta",default=1/3,type=float)
     parser.add_argument("--gamma",default=1/3,type=float)
-    parser.add_argument("--cpu",default=True,type=bool)
+    parser.add_argument("--cpu",action="store_true")
     parser.add_argument("--device_ids",nargs='+',default=[0,1,2],type=int,help="使用的GPU设备")
     parser.add_argument("--eval",default=False,type=bool,help="训练完一个epoch之后是否进行评估")
     parser.add_argument("--seed",default=209,type=int,help="统一的随机数种子")
@@ -85,6 +85,7 @@ def train(args,train_dataloader,dev_dataloader=None):
         device = torch.device("cpu")
         model.to(device=device)
     print(device)
+    model.to(device=device)
     model.train()
     no_decay = ['bias','LayerNorm.weight']
     optimizer_grouped_parameters = [
@@ -106,7 +107,10 @@ def train(args,train_dataloader,dev_dataloader=None):
             text, mask, start, end,span = batch['text'],batch['mask'],batch['start'],batch['end'],batch['span']
             text, mask, start, end = torch.tensor(text).to(device=device), torch.stack(mask).to(device=device), \
                                      torch.stack(start).to(device=device), torch.stack(end).to(device=device)
-            loss = model.loss(text,mask,start,end,span)
+            if isinstance(model,torch.nn.DataParallel):
+                loss = model.module.loss(text,mask,start,end,span)
+            else:
+                loss = model.loss(text,mask,start,end,span)
             loss.backward()
             optimizer.step()
             scheduler.step()

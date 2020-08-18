@@ -9,6 +9,7 @@ class MyModel(nn.Module):
     def __init__(self, config):
         super(MyModel, self).__init__()
         self.config = config
+        self.device = torcg.device('cpu') if config.cpu else torch.device('cuda')
         self.pretrained_model = BertModel.from_pretrained(config.pretrained_model_name_or_path)
         hidden_size = self.pretrained_model.config.hidden_size
         self.start_linear = nn.Linear(hidden_size, 2)
@@ -79,7 +80,8 @@ class MyModel(nn.Module):
         for i, sps in enumerate(spans):
             for s,e in sps:
                 t = self.m(torch.cat((rep[i][s],rep[i][e])))
-                l = nn.functional.binary_cross_entropy_with_logits(t,torch.zeros(t.shape))
+                st = torch.ones(t.shape).to(device=self.device)
+                l = nn.functional.binary_cross_entropy_with_logits(t,st)
                 loss_span.append(l)
         loss_span = sum(loss_span)
         loss = self.config.alpha*loss_start+self.config.beta*loss_end+self.config.gamma*loss_span
