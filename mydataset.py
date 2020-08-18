@@ -123,7 +123,10 @@ class MyDataset2:
                 for e in end_position:
                     end_target[e+len(query)+1]=1
                 self.end_targets.append(end_target)
-                span = list(zip(start_position,end_position))
+                #添加spans，注意这里的start和end的位置会有一个偏移量
+                span = []
+                for s,e in zip(start_position,end_position):
+                    span.append((s+len(query)+1,e+len(query)+1))
                 self.spans.append(span)
 
     def __len__(self):

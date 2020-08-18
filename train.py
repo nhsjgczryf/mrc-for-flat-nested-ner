@@ -56,7 +56,7 @@ def args_parser():
     parser.add_argument("--beta",default=1/3,type=float)
     parser.add_argument("--gamma",default=1/3,type=float)
     parser.add_argument("--cpu",action="store_true")
-    parser.add_argument("--device_ids",nargs='+',default=[0,1,2],type=int,help="使用的GPU设备")
+    parser.add_argument("--device_ids",nargs='+',default=[0,1,2,3],type=int,help="使用的GPU设备")
     parser.add_argument("--eval",action="store_true",help="训练完一个epoch之后是否进行评估")
     parser.add_argument("--seed",default=209,type=int,help="统一的随机数种子")
     args = parser.parse_args()
@@ -81,7 +81,6 @@ def load_data2(args):
         dev_dataloader = DataLoader(dev_dataset, batch_size=args.train_batch, collate_fn=collate_fn, shuffle=True)
         return train_dataloader, dev_dataloader
     return train_dataloader
-
 
 def train(args,train_dataloader,dev_dataloader=None):
     '''
@@ -135,7 +134,6 @@ def train(args,train_dataloader,dev_dataloader=None):
         torch.save({"epoch":epoch,'model_state_dict':model.state_dict(),"args":args},"./checkpoint")
     writer.close()
 
-
 def train2(args,train_dataloader,dev_dataloader=None):
     model = MyModel(args)
     if not args.cpu:
@@ -173,21 +171,61 @@ def train2(args,train_dataloader,dev_dataloader=None):
             loss.backward()
             optimizer.step()
             scheduler.step()
-            #if i%100==0:
-            current = time.time()
-            run_time = (current-start_time)/(60*60)
-            remain = run_time*(train_batchs-i-1)/(i+1)
-            print("epoch:{}/{} batch:{}/{},当前epoch已经运行{:.2f}h，剩余{:.2f}h".format(epoch + 1, args.epochs, i + 1, train_batchs,
-                                                                                run_time, remain))
-            writer.add_scalar("loss",loss.item(),i)
-            writer.flush()
+            if i%(len(train_dataloader)//20)==0:
+                current = time.time()
+                run_time = (current-start_time)/(60*60)
+                remain = run_time*(train_batchs-i-1)/(i+1)
+                print("epoch:{}/{} batch:{}/{},当前epoch已经运行{:.2f}h，剩余{:.2f}h".format(epoch + 1, args.epochs, i + 1,
+                                                                                    train_batchs, run_time, remain))
+                writer.add_scalar("loss",loss.item(),i)
+                writer.flush()
         torch.save({"epoch":epoch,'model_state_dict':model.state_dict(),"args":args},"./checkpoint")
+        if args.eval:
+            p,r,f = evaluation(model,dev_dataloader)
+            writer.add_scalar('precision', p, epoch)
+            writer.add_scalar('recall', r, epoch)
+            writer.add_scalar('f1', f,epoch)
+            writer.flush()
     writer.close()
+
+def evaluation(model,dev_dataloader):
+    """这部分代码用于训练过程中的评估"""
+    model.eval()
+    gold = []
+    predict = []
+    with torch.no_grad:
+        for i,batch in enumerate(dev_dataloader):
+            text, mask, segment_id, gold_spans = batch['text'], batch['mask'], batch['segment_id'],batch['span']
+            pre_spans = model(text,mask,segment_id)
+            gold.append((i,gold_spans))
+            predict.append((i,pre_spans))
+    gold2 = set()
+    predict2 = set()
+    for g in gold:
+        i,gold_spans = g
+        for j,gs in enumerate(gold_spans):
+            item = (i,j,gs[0],gs[1])
+            gold2.add(item)
+    for p in predict:
+        i,pre_spans = p
+        for j, ps in enumerate(pre_spans):
+            item = (i,j.ps[0],ps[1])
+            predict2.add(item)
+    TP = set.intersection(gold2,predict2)
+    precision = TP/len(predict2)
+    recall = TP/len(gold2)
+    f1 = 2*precision*recall/(precision+recall+1e-6)
+    print("precision:",precision)
+    print("recall:",recall)
+    print("f1:",f1)
+    return precision,recall,f1
 
 if __name__=="__main__":
     args = args_parser()
     set_seed(args.seed)
     #train_dataloader = load_data(args)
     #train(args, train_dataloader)
-    train_dataloader = load_data2(args)
+    args.eval = True
+    args.train_path = args.dev_path
+    train_dataloader,dev_dataloader = load_data2(args)
     train2(args, train_dataloader)
