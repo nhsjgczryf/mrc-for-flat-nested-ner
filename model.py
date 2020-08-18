@@ -9,7 +9,7 @@ class MyModel(nn.Module):
     def __init__(self, config):
         super(MyModel, self).__init__()
         self.config = config
-        self.device = torcg.device('cpu') if config.cpu else torch.device('cuda')
+        self.device = torch.device('cpu') if config.cpu else torch.device('cuda')
         self.pretrained_model = BertModel.from_pretrained(config.pretrained_model_name_or_path)
         hidden_size = self.pretrained_model.config.hidden_size
         self.start_linear = nn.Linear(hidden_size, 2)
@@ -17,14 +17,14 @@ class MyModel(nn.Module):
         self.dropout = nn.Dropout(config.dropout_prob)
         self.m = nn.Linear(2*hidden_size, 1)
 
-    def forward(self, input, mask):
+    def forward(self, input, mask,segment_id):
         """
         用于预测
         Args:
             input:(batch, max_len)
             mask: (batch, max_len)
         """
-        _, rep = self.pretrained_model(input,mask)
+        _, rep = self.pretrained_model(input,mask,segment_id)
         ref = self.dropout(rep)
         start_logits = self.start_linear(rep)
         end_logits = self.end_linear(rep)
@@ -54,7 +54,7 @@ class MyModel(nn.Module):
             spans.append(sps)
         return spans
 
-    def loss(self, input, mask, start_target, end_target, spans):
+    def loss(self, input, mask, segment_id, start_target, end_target, spans):
         '''
         :param input: (batch, max_len)
         :param mask: (batch, max_len)
@@ -64,9 +64,10 @@ class MyModel(nn.Module):
         :return:
         '''
         mask = mask.bool()
+        segment_id = segment_id.long()
         start_target = start_target.long()
         end_target = end_target.long()
-        rep, _ = self.pretrained_model(input)
+        rep, _ = self.pretrained_model(input,attention_mask=mask,token_type_ids =segment_id)
         start_logits = self.start_linear(rep)#(batch,max_len,2)
         end_logits = self.end_linear(rep)
         batch_size = input.shape[0]

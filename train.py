@@ -14,7 +14,7 @@ import random
 from transformers import *
 from transformers.optimization import get_linear_schedule_with_warmup
 from model import MyModel
-from mydataset import MyDataset,collate_fn
+from mydataset import *
 from torch.utils.data import DataLoader
 import  argparse
 from torch.utils.tensorboard import SummaryWriter
@@ -57,7 +57,7 @@ def args_parser():
     parser.add_argument("--gamma",default=1/3,type=float)
     parser.add_argument("--cpu",action="store_true")
     parser.add_argument("--device_ids",nargs='+',default=[0,1,2],type=int,help="使用的GPU设备")
-    parser.add_argument("--eval",default=False,type=bool,help="训练完一个epoch之后是否进行评估")
+    parser.add_argument("--eval",action="store_true",help="训练完一个epoch之后是否进行评估")
     parser.add_argument("--seed",default=209,type=int,help="统一的随机数种子")
     args = parser.parse_args()
     return args
@@ -72,6 +72,17 @@ def load_data(args):
         return train_dataloader, dev_dataloader
     return train_dataloader
 
+def load_data2(args):
+    tokenizer = BertTokenizer.from_pretrained(args.pretrained_model_name_or_path)
+    train_dataset = MyDataset2(args.train_path, tokenizer)
+    train_dataloader = DataLoader(train_dataset,batch_size=args.train_batch,collate_fn=collate_fn2,shuffle=True)
+    if args.eval:
+        dev_dataset = MyDataset(args.dev_path, tokenizer)
+        dev_dataloader = DataLoader(dev_dataset, batch_size=args.train_batch, collate_fn=collate_fn, shuffle=True)
+        return train_dataloader, dev_dataloader
+    return train_dataloader
+
+
 def train(args,train_dataloader,dev_dataloader=None):
     '''
     训练模型
@@ -79,13 +90,12 @@ def train(args,train_dataloader,dev_dataloader=None):
     '''
     model = MyModel(args)
     if not args.cpu:
-        model = torch.nn.DataParallel(model,device_ids=args.device_ids)
         device = torch.device("cuda")
+        model.to(device=device)
+        model = torch.nn.DataParallel(model,device_ids=args.device_ids)
     else:
         device = torch.device("cpu")
         model.to(device=device)
-    print(device)
-    model.to(device=device)
     model.train()
     no_decay = ['bias','LayerNorm.weight']
     optimizer_grouped_parameters = [
@@ -122,21 +132,62 @@ def train(args,train_dataloader,dev_dataloader=None):
                                                                                     run_time, remain))
             writer.add_scalar("loss",loss.item(),i)
             writer.flush()
-        torch.save({"epoch":epoch,'model_state_dic':model.state_dict(),"args":args},"./checkpoint")
+        torch.save({"epoch":epoch,'model_state_dict':model.state_dict(),"args":args},"./checkpoint")
     writer.close()
 
 
-
-
-def evaluation():
-    '''
-    每训练完一个epoch评估一下
-    Returns:
-    '''
-
+def train2(args,train_dataloader,dev_dataloader=None):
+    model = MyModel(args)
+    if not args.cpu:
+        device = torch.device("cuda")
+        model.to(device=device)
+        model = torch.nn.DataParallel(model,device_ids=args.device_ids)
+    else:
+        device = torch.device("cpu")
+        model.to(device=device)
+    model.train()
+    no_decay = ['bias','LayerNorm.weight']
+    optimizer_grouped_parameters = [
+            {"params":[p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+             'weight_decay':args.weight_decay},
+            {"params":[p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],"weight_decay":0.0}
+        ]
+    optimizer = torch.optim.AdamW(optimizer_grouped_parameters,lr=args.lr)
+    num_training_steps = args.epochs*len(train_dataloader)
+    scheduler = get_linear_schedule_with_warmup(optimizer, args.warmup_steps, num_training_steps)
+    writer = SummaryWriter(log_dir='./log')
+    train_batchs = len(train_dataloader)
+    print("start training")
+    for epoch in range(args.epochs):
+        start_time = time.time()
+        print("epoch:",epoch)
+        for i,batch in enumerate(train_dataloader):
+            optimizer.zero_grad()
+            text, mask, segment_id, start, end,span = batch['text'],batch['mask'], batch['segment_id'],batch['start'],batch['end'],batch['span']
+            text, mask, segment_id, start, end = text.to(device=device), mask.to(device=device), segment_id.to(device=device),\
+                                     start.to(device=device), end.to(device=device)
+            if isinstance(model,torch.nn.DataParallel):
+                loss = model.module.loss(text,mask,segment_id,start,end,span)
+            else:
+                loss = model.loss(text,mask,segment_id,start,end,span)
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+            #if i%100==0:
+            current = time.time()
+            run_time = (current-start_time)/(60*60)
+            remain = run_time*(train_batchs-i-1)/(i+1)
+            print("epoch:{}/{} batch:{}/{},当前epoch已经运行{:.2f}h，剩余{:.2f}h".format(epoch + 1, args.epochs, i + 1, train_batchs,
+                                                                                run_time, remain))
+            writer.add_scalar("loss",loss.item(),i)
+            writer.flush()
+        torch.save({"epoch":epoch,'model_state_dict':model.state_dict(),"args":args},"./checkpoint")
+    writer.close()
 
 if __name__=="__main__":
     args = args_parser()
     set_seed(args.seed)
-    train_dataloader = load_data(args)
-    train(args, train_dataloader)
+    #train_dataloader = load_data(args)
+    #train(args, train_dataloader)
+    train_dataloader = load_data2(args)
+    train2(args, train_dataloader)
