@@ -161,13 +161,13 @@ def train2(args,train_dataloader,dev_dataloader=None):
         print("epoch:",epoch)
         for i,batch in enumerate(train_dataloader):
             optimizer.zero_grad()
-            text, mask, segment_id, start, end,span = batch['text'],batch['mask'], batch['segment_id'],batch['start'],batch['end'],batch['span']
+            text, mask, segment_id, start, end = batch['text'],batch['mask'], batch['segment_id'],batch['start'],batch['end']
             text, mask, segment_id, start, end = text.to(device=device), mask.to(device=device), segment_id.to(device=device),\
                                      start.to(device=device), end.to(device=device)
             if isinstance(model,torch.nn.DataParallel):
-                loss = model.module.loss(text,mask,segment_id,start,end,span)
+                loss = model.module.loss(text,mask,segment_id,start,end)
             else:
-                loss = model.loss(text,mask,segment_id,start,end,span)
+                loss = model.loss(text,mask,segment_id,start,end)
             loss.backward()
             optimizer.step()
             scheduler.step()
@@ -225,6 +225,7 @@ if __name__=="__main__":
     set_seed(args.seed)
     #train_dataloader = load_data(args)
     #train(args, train_dataloader)
+    #args.cpu = True
     args.eval = True
     args.train_path = args.dev_path
     train_dataloader,dev_dataloader = load_data2(args)

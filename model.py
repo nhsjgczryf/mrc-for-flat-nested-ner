@@ -56,7 +56,53 @@ class MyModel(nn.Module):
             spans.append(sps)
         return spans
 
-    def loss(self, input, mask, segment_id, start_target, end_target, spans):
+    def loss(self, input, mask, segment_id, start_target, end_target):
+        '''
+        :param input: (batch, max_len)
+        :param mask: (batch, max_len)
+        :param start_target: (batch, max_len)
+        :param end_target: (batch, max_len)
+        :return:
+        '''
+        mask = mask.bool()
+        segment_id = segment_id.long()
+        start_target = start_target.long()
+        end_target = end_target.long()
+        rep, _ = self.pretrained_model(input,attention_mask=mask,token_type_ids =segment_id)
+        rep = self.dropout(rep)
+        start_logits = self.start_linear(rep)#(batch,max_len,2)
+        end_logits = self.end_linear(rep)
+        batch_size = input.shape[0]
+        real_start_logits = torch.cat([start_logits[i][mask[i]]for i in range(batch_size)])
+        real_end_logits = torch.cat([end_logits[i][mask[i]] for i in range(batch_size)])
+        real_start_target = start_target.masked_select(mask)
+        real_end_target = end_target.masked_select(mask)
+        loss_start = nn.functional.cross_entropy(real_start_logits, real_start_target)
+        loss_end = nn.functional.cross_entropy(real_end_logits, real_end_target)
+        loss_span = []
+        #获取spans
+        spans = []
+        for i in range(start_target.shape[0]):
+            start = []
+            end = []
+            for j in range(start_target[i].shape[0]):
+                if start_target[i][j]==1:
+                    start.append(j)
+                if end_target[i][j]==1:
+                    end.append(j)
+            assert len(start)==len(end)
+            spans.append(list(zip(start,end)))
+        for i, sps in enumerate(spans):
+            for s,e in sps:
+                t = self.m(self.dropout(torch.cat((rep[i][s],rep[i][e]))))
+                st = torch.ones(t.shape).to(device=self.device)
+                l = nn.functional.binary_cross_entropy_with_logits(t,st)
+                loss_span.append(l)
+        loss_span = sum(loss_span)
+        loss = self.config.alpha*loss_start+self.config.beta*loss_end+self.config.gamma*loss_span
+        return loss
+
+    def _loss(self, input, mask, segment_id, start_target, end_target, spans):
         '''
         :param input: (batch, max_len)
         :param mask: (batch, max_len)
