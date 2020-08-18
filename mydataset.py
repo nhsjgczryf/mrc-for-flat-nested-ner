@@ -108,18 +108,9 @@ class MyDataset(Dataset):
                 'start':self.start_targets[i],'end':self.end_targets[i],
                 'span':self.spans[i],'mask':self.masks[i]}
 
-ollate_fn=lambda x:x
 def collate_fn(batch):
-    print(batch)
     nbatch = {}
     for d in batch:
         for k,v in d.items():
             nbatch[k]=nbatch.get(k,[])+[v]
     return nbatch
-
-if __name__=="__main__":
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-    dataset = MyDataset("./datasets/OntoNotes4.0/mrc-ner.train",tokenizer)
-    dataloader = DataLoader(dataset,batch_size=20,collate_fn=collate_fn)
-    data = list(dataloader)
