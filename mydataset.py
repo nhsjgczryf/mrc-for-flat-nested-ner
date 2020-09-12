@@ -3,7 +3,7 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, DistributedSampler
 from transformers import BertTokenizer
-
+from tqdm import tqdm
 
 
 
@@ -68,7 +68,7 @@ class MyDataset:
                 query = d['query']
                 query,context,start_position,end_position = trans(tokenizer,query,context,start_position,end_position)
                 #添加预训练模型的输入
-                text = ['[CLS]']+query+['[SEP]']+context+['[SEP]']
+                text = ['[CLS]']+query+['[SEP]']+context[:200]+['[SEP]']
                 text = tokenizer.convert_tokens_to_ids(text)
                 text = torch.tensor(text)
                 self.texts.append(text)
@@ -139,7 +139,7 @@ class BatchDataset:
         self.end_targets = []
         self.spans = []
         self.max_tokens = max_tokens
-        for d in self.data:
+        for d in tqdm(self.data,desc="stage1"):
             if (not allow_impossible) and d['impossible']:
                 continue
             else:
@@ -177,6 +177,7 @@ class BatchDataset:
         #下面这个循环有两个bug，第一个是如果某个样本的长度超过了batch允许的max_len会出错。
         #第二个是可能存在最后一个样本丢失的情况（当只剩最后一个样本时，应该单独作为batch，但是会被舍弃）
         #其实就是无法容纳一个样本作为batch的情况
+        pbar = tqdm(total=len(self.texts),desc='stage2')
         while i<len(self.texts):
             #print("{}/{}\n".format(i,len(self.texts)))
             batch_tokens = 0
@@ -196,6 +197,8 @@ class BatchDataset:
             batch = batch[:-1]
             indexs.append((i,i+len(batch)))
             i = j-1
+            pbar.update(len(batch))
+        pbar.close()
         self.texts1 = []
         self.segment_ids1 = []
         self.start_targets1 = []
@@ -242,11 +245,60 @@ class BatchDataset:
         return {'text': self.texts1[i],'segment_id':self.segment_ids1[i],
                 'start': self.start_targets1[i], 'end': self.end_targets1[i],
                 'span_tensor': self.span_tensor[i],'mask':self.mask[i]}
+    
+
+class MyDistributedSampler(DistributedSampler):
+    def __init__(self,dataset,num_replicas=None, rank=None, shuffle=True, seed=0):
+        DistributedSampler.__init__(self,dataset)
+        self.seed=seed
+        indices = list(range(len(self.dataset)))
+        indices += indices[:(self.total_size - len(indices))]
+        self.indices = indices#这个是我们的数据集的索引/
+        #这个用来记录我们的loss的索引,self.loss[i]代表local_rank=i的进程的所有batch的loss
+        #self.loss = torch.tensor([[0. for j in self.indices//self.num_replicas] for i in range(self.num_replicas)])
+        self.loss = torch.full([self.total_size],1,dtype=torch.float32)
+        self.loss_idxs = [[] for i in range(self.num_replicas)]#self.loss_idx[i][j]代表第i个进程的第j个batch所对应的为dataset顺序的第i个元素
+        self.loss_sampler_epoch=10000000
+
+        
+    def __iter__(self):
+        if self.epoch<self.loss_sampler_epoch:
+            #对前三个epoch正常处理
+            if self.shuffle:
+                # deterministically shuffle based on epoch and seed
+                g = torch.Generator()
+                g.manual_seed(self.seed + self.epoch)
+                indices0 = torch.randperm(len(self.indices), generator=g).tolist()
+                indices = [self.indices[i] for i in indices0]
+                self.loss_idxs = [indices[rank:self.total_size:self.num_replicas] for rank in range(self.num_replicas)]
+            else:
+                indices = self.indices
+                self.loss_idxs = [indices[rank:self.total_size:self.num_replicas] for rank in range(self.num_replicas)]
+        else:
+            g = torch.Generator()
+            g.manual_seed(self.seed + self.epoch)
+            indices0 = torch.multinomial(self.loss, self.total_size, replacement=True, generator=g)
+            indices = [self.indices[i] for i in indices0]
+            self.loss_idxs = [indices[rank:self.total_size:self.num_replicas] for rank in range(self.num_replicas)]
+        indices = indices[self.rank:self.total_size:self.num_replicas]
+        assert len(indices) == self.num_samples
+        return iter(indices)
+    
+    def set_loss(self,global_loss):
+        for i,lo in enumerate(global_loss):
+            for j,loj in enumerate(lo):
+                idx = self.loss_idxs[i][j]
+                self.loss[idx]=loj
+        #print(self.loss)
+        
+    def set_loss_sampler_epoch(self,loss_sampler_epoch):
+        self.loss_sampler_epoch=loss_sampler_epoch
 
 def dist_load_data(pretrained_model_name_or_path, path,max_tokens,allow_impossible=False):
     tokenizer = BertTokenizer.from_pretrained(pretrained_model_name_or_path)
     dataset = BatchDataset(path, tokenizer,max_tokens,allow_impossible)
-    sampler = DistributedSampler(dataset)
+    #sampler = DistributedSampler(dataset)
+    sampler = MyDistributedSampler(dataset)
     dataloader = DataLoader(dataset, batch_size=1, collate_fn=dist_collate_fn,
                                   pin_memory=False, sampler=sampler)
     return dataloader

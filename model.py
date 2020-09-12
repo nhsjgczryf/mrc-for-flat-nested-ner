@@ -224,42 +224,6 @@ class MyModel(nn.Module):
             full_span_target = (span_start_target&span_end_target).float()
             full_span_target = full_span_target[span_mask]
             loss_span = nn.functional.binary_cross_entropy_with_logits(span_rep,full_span_target,reduction=self.config.reduction)
-            '''
-            spans = []
-            for i in range(batch_size):
-                start = []
-                end = []
-                for j in range(0, span_tensor.shape[1],2):
-                    if span_tensor[i][j]!=-1:
-                        start.append(span_tensor[i][j].item())
-                        end.append(span_tensor[i][j+1].item())
-                assert len(start)==len(end)
-                spans.append(list(zip(start, end)))
-            all_starts = []
-            for  i in range(batch_size):
-                starts = []
-                for j in range(segment_id.shape[1]):
-                    if segment_id[i][j]==1:
-                        starts.append(j)
-                all_starts.append(starts)
-            all_ends = all_starts
-            all_span_target = []
-            all_span_logit = []
-            for i in range(batch_size):
-                for s in all_starts[i]:
-                    for e in all_ends[i]:
-                        if s<=e:
-                            if (s,e) in spans[i]:
-                                span_target = torch.tensor([1.],device=self.device)
-                            else:
-                                span_target = torch.tensor([0.],device=self.device)
-                            span_logit = self.m(self.dropout(torch.cat((rep[i][s],rep[i][e]))))
-                            all_span_target.append(span_target)
-                            all_span_logit.append(span_logit)
-            true_spans = torch.cat(all_span_target)
-            span_logits = torch.cat(all_span_logit)
-            loss_span = nn.functional.binary_cross_entropy_with_logits(span_logits,true_spans,reduction=self.config.reduction)
-            '''
             
         #print("start positive ratio:",sum(real_start_target).item()/len(real_end_target))
         #print("end positive ratio:",sum(real_end_target).item()/len(real_end_target))
@@ -278,8 +242,10 @@ class MyModel(nn.Module):
         if not self.config.cls:
             loss_cls=torch.tensor(0)
         loss = self.config.alpha*loss_start+self.config.beta*loss_end+self.config.gamma*loss_span+self.config.theta*loss_cls
-        print("start loss",loss_start.item()," end loss:",loss_end.item()," span loss:",loss_span.item(),"cls loss:",loss_cls.item())
-        return loss.view(1)
+        #print("start loss",loss_start.item()," end loss:",loss_end.item()," span loss:",loss_span.item(),"cls loss:",loss_cls.item())
+        other_loss = {}
+        return loss.view(1),{'loss':loss.item(),"start_loss":loss_start.item(),"end_loss":loss_end.item(),"span_loss":loss_span.item(),"cls_loss":loss_cls.item()}
+    
     
 class MyModel2(MyModel):
     def predict(self, input, mask,segment_id,mask_decode=True,threshold=-0.1):

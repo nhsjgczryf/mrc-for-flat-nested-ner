@@ -24,7 +24,7 @@ def dev_test_eval(model,pretrained_model_name_or_path,dev_path,test_path):
     print("test_precision:",dev_precision,"test_recall",dev_recall,"test_f1",dev_f1)
 
 
-def evaluation(model, dataloader, train_eval=True,desc=None):
+def evaluation(model, dataloader, train_eval=True):
     """这部分代码用于训练过程中的评估"""
     if hasattr(model,'module'):
         model = model.module
@@ -36,16 +36,22 @@ def evaluation(model, dataloader, train_eval=True,desc=None):
     #print(device)
     gold = []
     predict = []
-    tqdm_dataloader = tqdm(dataloader,desc=desc)
+    tqdm_dataloader = tqdm(dataloader,desc='eval',ncols=100)
     with torch.no_grad():
         for i,batch in enumerate(tqdm_dataloader):
+            #print(i)
             text, mask, segment_id, gold_spans = batch['text'], batch['mask'], batch['segment_id'],batch['span']
             text, mask, segment_id = text.to(device),mask.to(device), segment_id.to(device)
-            pre_spans = model.predict(text,mask,segment_id,mask_decode)
-            #for d in batch['example']:
-            #    interaction(model,tokenizer,d)
-            gold.append((i,gold_spans))
-            predict.append((i,pre_spans))
+            try:
+                pre_spans = model.predict(text,mask,segment_id,mask_decode)
+                #for d in batch['example']:
+                #    interaction(model,tokenizer,d)
+                gold.append((i,gold_spans))
+                predict.append((i,pre_spans))
+            except Exception as e:
+                print(text, mask, segment_id)
+                print(e)
+                print(i)
     gold2 = set()
     predict2 = set()
     for g in gold:
@@ -90,23 +96,6 @@ def interaction(model,tokenizer,d):
         segment_id = segment_id.cuda()
         model = model.cuda()
     spans = model.predict(input_ids,mask,segment_id)
-    #print("with mask decode")
-    #print(spans)
-    #print("without mask decode")
-    #print(model.predict(input_ids,mask,segment_id,False))
-    #下面是计算loss
-    '''
-    start_target = torch.zeros(len(text))
-    end_target = torch.zeros(len(text))
-    span_tensor = torch.full((len(text)*2,),-1,dtype=torch.long)
-    for i,(s,e) in enumerate(zip(start_position,end_position)):
-        start_target[s] = 1
-        end_target[e] = 1
-        span_tensor[2*i]=s
-        span_tensor[2*i+1]=e
-    loss = model(input_ids,mask.cuda(),segment_id.cuda(),start_target.view(1,-1).cuda(),
-                 end_target.view(1,-1).cuda(), span_tensor.view(1,-1).cuda())
-    '''
     spans = spans[0]
     text_spans = []
     for s,e in spans:
@@ -125,3 +114,19 @@ def interaction(model,tokenizer,d):
     print("predict_text_span:",text_spans)
     print("gold_text_span:",gold_span)
     return text_spans
+
+def test(model_dir,file,batch_size,args,tensorboard_writer):
+    path = model_dir+file
+    cpt = torch.load(path)
+    mymodel = MyModel(args)
+    mymodel.load_state_dict(cpt["state_dict"])
+    test_dataset = pre1_test_dataset if args.pretrained_model_name_or_path==pretrained_model1 else pre2_test_dataset
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, collate_fn=collate_fn,
+                              pin_memory=False,shuffle=False)
+    print(path,'\n',args)
+    time.sleep(0.1)
+    p,r,f = evaluation(mymodel,test_dataloader,train_eval=False)
+    print("model {} test dataset:\nprecision:{:.4f} recall:{:.4f} f1:{:.4f}".format(file,p,r,f))
+    tensorboard_writer.add_scalars("score_%s"%file,{'precision':p,'recall':r,'f1':f})
+    tensorboard_writer.flush()
+    return p,r,f
