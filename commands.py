@@ -37,6 +37,7 @@ cmd30 = cmd27.replace("--cls"," ")
 cmd31 = cmd26.replace("450","512") +"  --max_grad_norm  0.75"
 cmd32 = cmd31.replace("--cls"," ")
 cmd33 = (cmd26+" --max_grad_norm 0.5").replace("8e-6","1e-5")
+cmd34 = cmd29 +"  --loss_sampler_epoch 3"
 def run(cmd):
     print(cmd)
     log_file  = "/home/wangnan/mrc4ner/log/bash_log/%s.txt"%_id
@@ -51,7 +52,7 @@ if __name__=="__main__":
     test_cmd = " --not_store --train_path ./datasets/OntoNotes4.0/testdata.json --dev_path ./datasets/OntoNotes4.0/testdata.json"
     #commands = [cmd12,cmd13,cmd14]
     #commands = [cmd16,cmd17,cmd18,cmd19]
-    commands = [cmd33]
+    commands = [cmd34]
     for command in commands:
         print(command)
         os.system(command)
