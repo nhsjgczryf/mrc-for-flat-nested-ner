@@ -143,13 +143,17 @@ def train(args,train_dataloader,dev_dataloader=None):
             optimizer.step()
             if args.warmup_ratio>=0:
                 scheduler.step()
-            #if (i+1)%save_interval==0 and args.local_rank in [0,-1] and not args.not_store:
-            #    if hasattr(model,'module'):
-            #        state_dict = model.module.state_dict()
-            #    else:
-            #        state_dict = model.state_dict()
-            #    torch.save({"epoch":epoch,'state_dict':state_dict},"./checkpoints/%s/checkpoint_%d_%d.cpt"%(mid,epoch,(i+1)//save_interval))
-            #    print("model saved")
+            if (i+1)%save_interval==0 and args.local_rank in [0,-1] and not args.not_store:
+                if not os.path.exists('./checkpoints/{}/{}'.format(args.dataset_tag,mid)):
+                    os.makedirs('./checkpoints/{}/{}'.format(args.dataset_tag,mid))
+                if (i+1)==save_interval and epoch==0:
+                    pickle.dump(args,open('./checkpoints/%s/%s/args'%(args.dataset_tag,mid),'wb'))
+                if hasattr(model,'module'):
+                    state_dict = model.module.state_dict()
+                else:
+                    state_dict = model.state_dict()
+                torch.save({"epoch":epoch,'state_dict':state_dict},"./checkpoints/%s/%s/checkpoint_%d_%d.cpt"%(args.dataset_tag,mid,epoch,(i+1)//save_interval))
+                print("model saved")
             if args.local_rank!=-1:
                 reduced_loss = reduce_tensor(loss.data)
             if args.local_rank in [0,-1]:
