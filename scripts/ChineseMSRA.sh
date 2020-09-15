@@ -1,0 +1,11 @@
+CUDA_VISIBLE_DEVICES=0,1,3 python -m torch.distributed.launch --master_port 12343 --nproc_per_node 3 train.py \
+--train_path /home/wangnan/mrc4ner/datasets/ChineseMSRA/mrc-ner.train \
+--dataset_tag ChineseMSRA \
+--max_grad_norm 0.5 \
+--train_span_method gold  \
+--cls \
+--span_layer \
+--allow_impossible \
+--lr 9e-6  \
+--max_tokens 512 \
+--pretrained_model_name_or_path /home/wangnan/pretrained_models/chinese-bert-wwm-ext
