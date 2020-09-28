@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 from transformers import BertModel
 from tqdm import trange
-            
+from loss import Normalized_Focal_Loss,DynamicLoss
 
 class MyModel(nn.Module):
     def __init__(self, config):
@@ -25,6 +25,22 @@ class MyModel(nn.Module):
                                    nn.Linear(hidden_size,1))
         else:
             self.m = nn.Linear(2*hidden_size, 1)
+        if config.zero_init:
+          for p in self.start_linear.parameters():
+            nn.init.zeros_(p)
+          for p in self.end_linear.parameters():
+            nn.init.zeros_(p)
+          if not config.span_layer:
+            for p in self.m.parameters():
+              nn.init.zeros_(p)
+        if not config.dynamic_loss:
+          self.loss_func = Normalized_Focal_Loss(alpha=config.loss_alpha,gamma=config.loss_gamma,\
+                        weight_grad=config.loss_weight_grad,reduction=config.reduction)
+        else:
+          self.loss_func_start = DynamicLoss(2,reduction=config.reduction,beta=config.dynamic_loss_beta, upper_bound=config.upper_bound, hard_weight=config.hard_weight)
+          self.loss_func_end = DynamicLoss(2,reduction=config.reduction,beta=config.dynamic_loss_beta, upper_bound=config.upper_bound, hard_weight=config.hard_weight)
+          self.loss_func_span = DynamicLoss(2,reduction=config.reduction,beta=config.dynamic_loss_beta, upper_bound=config.upper_bound, hard_weight=config.hard_weight)
+          self.loss_func_cls = DynamicLoss(2,reduction=config.reduction,beta=config.dynamic_loss_beta, upper_bound=config.upper_bound, hard_weight=config.hard_weight)
 
     def predict(self, input, mask,segment_id,mask_decode=True):
         """
@@ -142,8 +158,12 @@ class MyModel(nn.Module):
         real_end_logits = end_logits[context_mask]
         real_start_target = start_target.masked_select(context_mask)
         real_end_target = end_target.masked_select(context_mask)
-        loss_start = nn.functional.cross_entropy(real_start_logits, real_start_target,reduction=self.config.reduction)
-        loss_end = nn.functional.cross_entropy(real_end_logits, real_end_target,reduction=self.config.reduction)
+        if not self.config.dynamic_loss:
+          loss_start = self.loss_func(real_start_logits,real_start_target)
+          loss_end = self.loss_func(real_end_logits,real_end_target)
+        else:
+          loss_start = self.loss_func_start(real_start_logits,real_start_target)
+          loss_end = self.loss_func_end(real_end_logits,real_end_target)
         if self.config.train_span_method!="full":
             #获取真实的spans
             spans = []
@@ -204,7 +224,11 @@ class MyModel(nn.Module):
             else:
                 true_spans = torch.cat(all_span_target)
                 span_logits = torch.cat(all_span_logit)
-                loss_span = nn.functional.binary_cross_entropy_with_logits(span_logits,true_spans,reduction=self.config.reduction)
+                #loss_span = nn.functional.binary_cross_entropy_with_logits(span_logits,true_spans,reduction=self.config.reduction)
+                if not self.config.dynamic_loss:
+                  loss_span = self.loss_func(span_logits,true_spans)
+                else:
+                  loss_span = self.loss_func_span(span_logits,true_spans)
         else:
             seq_len = rep.shape[1]
             span_mask_start = context_mask.unsqueeze(2).expand(-1,-1,seq_len)#span_mask_start[b][i][j]=context_mask[b][i]
@@ -223,8 +247,11 @@ class MyModel(nn.Module):
             span_end_target = end_target.unsqueeze(1).expand(-1,seq_len,-1)#span_mask_start[b][i][j]=end_target[b][j]
             full_span_target = (span_start_target&span_end_target).float()
             full_span_target = full_span_target[span_mask]
-            loss_span = nn.functional.binary_cross_entropy_with_logits(span_rep,full_span_target,reduction=self.config.reduction)
-            
+            #loss_span = nn.functional.binary_cross_entropy_with_logits(span_rep,full_span_target,reduction=self.config.reduction)
+            if not self.config.dynamic_loss:
+              loss_span = self.loss_func(span_rep,full_span_target)
+            else:
+              loss_span = self.loss_func_span(span_rep,full_span_target)
         #print("start positive ratio:",sum(real_start_target).item()/len(real_end_target))
         #print("end positive ratio:",sum(real_end_target).item()/len(real_end_target))
         #print("span positive ratio:",sum(all_span_target).item()/len(all_span_target))
@@ -236,7 +263,11 @@ class MyModel(nn.Module):
                     cls_target[i][0]=1
                 else:
                     cls_target[i][0]=0
-            loss_cls = nn.functional.binary_cross_entropy_with_logits(cls_rep,cls_target,reduction=self.config.reduction)
+            #loss_cls = nn.functional.binary_cross_entropy_with_logits(cls_rep,cls_target,reduction=self.config.reduction)
+            if not self.config.dynamic_loss:
+              loss_cls = self.loss_func(cls_rep,cls_target)
+            else:
+              loss_cls = self.loss_func_cls(cls_rep,cls_target)
         if self.config.train_span_method!='full' and len(all_span_target)==0:
             loss_span=torch.tensor(0)
         if not self.config.cls:
@@ -246,50 +277,3 @@ class MyModel(nn.Module):
         other_loss = {}
         return loss.view(1),{'loss':loss.item(),"start_loss":loss_start.item(),"end_loss":loss_end.item(),"span_loss":loss_span.item(),"cls_loss":loss_cls.item()}
     
-    
-class MyModel2(MyModel):
-    def predict(self, input, mask,segment_id,mask_decode=True,threshold=-0.1):
-        #仅用于预测，没有dropout
-        #print('threshold:',threshold)
-        #print("device:",input.device)
-        #print("input shape:",input.shape)
-        mask = mask.bool()
-        segment_id = segment_id.long()
-        rep, cls_rep = self.pretrained_model(input,mask,segment_id)
-        start_logits = self.start_linear(rep)
-        end_logits = self.end_linear(rep)
-        #这种方法对GPU内存要求不高，训练的时候可以降低GPU的压力
-        #得到一个batch里面的Istart 和Iend
-        start_idxs = []
-        end_idxs = []
-        #print("start logits:",start_logits[0].T)
-        #print("end logits:",end_logits[0].T)
-        #print("get start and end logits")
-        for i in range(start_logits.shape[0]):
-            start_idx = []
-            end_idx = []
-            for j in range(start_logits.shape[1]-1):
-                if segment_id[i][j]!=0:
-                    if start_logits[i][j][0]<=start_logits[i][j][1]:
-                        start_idx.append(j)
-                    if end_logits[i][j][0]<=end_logits[i][j][1]:
-                        end_idx.append(j)
-            start_idxs.append(start_idx)
-            end_idxs.append(end_idx)
-        #print("start idxs:",start_idxs)
-        #print("end idxs:",end_idxs)
-        #print("start and end idxs length:",len(start_idxs))
-        spans = []
-        for i in range(input.shape[0]):
-            start_idx = start_idxs[i]
-            end_idx = end_idxs[i]
-            sps = []
-            for s in start_idx:
-                for e in end_idx:
-                    #if s<=e:
-                    #    print(s,e,self.m(torch.cat([rep[i][s],rep[i][e]])).item())
-                    if s<=e and self.m(torch.cat([rep[i][s],rep[i][e]]))>threshold:
-                        sps.append((s,e))
-            spans.append(sps)
-        #print("spans:",spans[0])
-        return spans
